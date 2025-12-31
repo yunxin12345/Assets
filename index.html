@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>企業資產管理系統 - 進階版</title>
+    <title>企業資產管理系統 - 進階匯出入版</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <style>
@@ -89,7 +89,15 @@
                     <button id="tab-staff" class="px-5 py-1.5 rounded-lg text-sm font-bold transition-all text-slate-500 hover:text-slate-700">員工管理</button>
                 </div>
             </div>
-            <div class="flex gap-3">
+            <div class="flex gap-2">
+                <button onclick="exportCSV()" class="p-2 text-slate-500 hover:text-indigo-600 hover:bg-slate-50 rounded-xl transition-colors flex items-center gap-2 text-sm font-bold">
+                    <i data-lucide="download" class="w-4 h-4"></i> 匯出 CSV
+                </button>
+                <label class="p-2 text-slate-500 hover:text-indigo-600 hover:bg-slate-50 rounded-xl transition-colors flex items-center gap-2 text-sm font-bold cursor-pointer">
+                    <i data-lucide="upload" class="w-4 h-4"></i> 匯入 CSV
+                    <input type="file" id="csv-upload" accept=".csv" class="hidden" onchange="importCSV(event)">
+                </label>
+                <div class="w-px h-6 bg-slate-200 mx-1"></div>
                 <button onclick="quickPrintSelect()" class="px-4 py-2 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-xl text-sm font-bold flex items-center gap-2 hover:bg-emerald-100 transition-colors">
                     <i data-lucide="file-text" class="w-4 h-4"></i> 生成領用單
                 </button>
@@ -200,6 +208,7 @@
 
         let currentSort = { key: null, direction: 'asc' };
         let currentFilter = 'all';
+        let currentTab = 'assets';
 
         function save() {
             localStorage.setItem('assets_pro_v3', JSON.stringify(assets));
@@ -209,6 +218,7 @@
 
         // 輔助函式：檢查是否為連結
         function isURL(str) {
+            if (!str) return false;
             try {
                 const url = new URL(str);
                 return url.protocol === "http:" || url.protocol === "https:";
@@ -221,11 +231,118 @@
             if (isURL(val)) window.open(val, '_blank');
         }
 
-        // 切換分頁
+        // CSV 功能實作
+        function exportCSV() {
+            let csvContent = "\ufeff"; // BOM for Excel UTF-8
+            
+            if (currentTab === 'assets') {
+                const headers = ["資產編號", "設備名稱", "保管人", "部門", "規格", "購買日期", "購買金額", "保固日期", "收據連結/明細", "保固書連結/說明"];
+                csvContent += headers.join(",") + "\n";
+                assets.forEach(a => {
+                    const row = [a.id, a.name, a.user || "", a.dept || "", a.spec || "", a.buyDate || "", a.price || "", a.warranty || "", a.receipt || "", a.warrantyDoc || ""];
+                    csvContent += row.map(v => `"${v.toString().replace(/"/g, '""')}"`).join(",") + "\n";
+                });
+                downloadBlob(csvContent, `資產清冊_${new Date().toLocaleDateString()}.csv`);
+            } else {
+                const headers = ["員工編號", "姓名", "部門", "到職日期"];
+                csvContent += headers.join(",") + "\n";
+                staff.forEach(s => {
+                    const row = [s.id, s.name, s.dept, s.joinDate];
+                    csvContent += row.map(v => `"${v.toString().replace(/"/g, '""')}"`).join(",") + "\n";
+                });
+                downloadBlob(csvContent, `員工名單_${new Date().toLocaleDateString()}.csv`);
+            }
+        }
+
+        function downloadBlob(content, filename) {
+            const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a");
+            const url = URL.createObjectURL(blob);
+            link.setAttribute("href", url);
+            link.setAttribute("download", filename);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        function importCSV(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const text = e.target.result;
+                const rows = text.split(/\r?\n/).filter(r => r.trim() !== "");
+                if (rows.length < 2) return;
+
+                const headers = rows[0].replace("\ufeff", "").split(",").map(h => h.replace(/"/g, '').trim());
+                const dataRows = rows.slice(1);
+
+                let importCount = 0;
+
+                // 根據標題判斷是資產還是員工
+                if (headers.includes("資產編號")) {
+                    dataRows.forEach(row => {
+                        const cols = parseCSVRow(row);
+                        const id = cols[0];
+                        if (id && !assets.some(a => a.id === id)) {
+                            assets.push({
+                                id: id, name: cols[1], user: cols[2], dept: cols[3], spec: cols[4],
+                                buyDate: cols[5], price: cols[6], warranty: cols[7],
+                                receipt: cols[8], warrantyDoc: cols[9], history: [], repairs: []
+                            });
+                            importCount++;
+                        }
+                    });
+                    alert(`成功匯入 ${importCount} 筆資產資料。`);
+                } else if (headers.includes("員工編號")) {
+                    dataRows.forEach(row => {
+                        const cols = parseCSVRow(row);
+                        const id = cols[0];
+                        if (id && !staff.some(s => s.id === id)) {
+                            staff.push({
+                                id: id, name: cols[1], dept: cols[2], joinDate: cols[3]
+                            });
+                            importCount++;
+                        }
+                    });
+                    alert(`成功匯入 ${importCount} 筆員工資料。`);
+                } else {
+                    alert("無法辨識 CSV 格式，請確認標題列是否正確。");
+                }
+                save();
+                event.target.value = ''; // Reset input
+            };
+            reader.readAsText(file);
+        }
+
+        // 處理 CSV 內容中的引號與逗號
+        function parseCSVRow(row) {
+            const result = [];
+            let current = '';
+            let inQuotes = false;
+            for (let i = 0; i < row.length; i++) {
+                const char = row[i];
+                if (char === '"') {
+                    inQuotes = !inQuotes;
+                } else if (char === ',' && !inQuotes) {
+                    result.push(current.trim());
+                    current = '';
+                } else {
+                    current += char;
+                }
+            }
+            result.push(current.trim());
+            return result.map(v => v.replace(/^"|"$/g, '').replace(/""/g, '"'));
+        }
+
+        // 分頁切換
         document.getElementById('tab-assets').onclick = () => switchTab('assets');
         document.getElementById('tab-staff').onclick = () => switchTab('staff');
 
         function switchTab(type) {
+            currentTab = type;
             const isAssets = type === 'assets';
             document.getElementById('section-assets').classList.toggle('hidden', !isAssets);
             document.getElementById('section-staff').classList.toggle('hidden', isAssets);
@@ -260,7 +377,7 @@
             const searchTerm = document.getElementById('asset-search').value.toLowerCase();
             
             let filteredAssets = assets.filter(a => {
-                const matchSearch = a.name.toLowerCase().includes(searchTerm) || a.id.toLowerCase().includes(searchTerm);
+                const matchSearch = (a.name || "").toLowerCase().includes(searchTerm) || (a.id || "").toLowerCase().includes(searchTerm);
                 if (!matchSearch) return false;
                 if (currentFilter === 'assigned') return !!a.user;
                 if (currentFilter === 'unassigned') return !a.user;
@@ -293,7 +410,7 @@
                     <td class="p-4 font-bold text-slate-700">${a.name}</td>
                     <td class="p-4">${a.user || '<span class="text-slate-300">未分配</span>'}</td>
                     <td class="p-4 text-slate-500 text-sm">${a.dept || '--'}</td>
-                    <td class="p-4 text-slate-500 text-sm truncate max-w-[200px]">${a.spec}</td>
+                    <td class="p-4 text-slate-500 text-sm truncate max-w-[200px]">${a.spec || ""}</td>
                     <td class="p-4 text-right">
                         <button onclick="event.stopPropagation(); generatePrintByUser('${a.user}')" class="text-indigo-600 hover:text-indigo-800 text-sm font-bold bg-indigo-50 px-3 py-1 rounded-lg">領用單</button>
                     </td>
@@ -346,7 +463,7 @@
 
                         <div>
                             <label class="text-xs font-bold text-slate-400 mb-1 block">規格描述</label>
-                            <input name="spec" value="${a.spec}" class="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl">
+                            <input name="spec" value="${a.spec || ''}" class="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl">
                         </div>
 
                         <div class="grid grid-cols-2 gap-4">
